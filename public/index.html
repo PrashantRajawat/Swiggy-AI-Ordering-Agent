@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Swiggy AI Ordering Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="card">
+        <h1>Swiggy AI Ordering Agent</h1>
+        <p>Personal assistant for best food combinations.</p>
+
+        <form id="recommend-form">
+          <label>What are you craving?</label>
+          <input id="query" placeholder="Chocolate waffles" required />
+
+          <div class="row">
+            <div>
+              <label>Budget (INR)</label>
+              <input id="budget" type="number" min="1" value="350" />
+            </div>
+            <div>
+              <label>People</label>
+              <input id="quantity" type="number" min="1" value="2" />
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>Premium</label>
+              <select id="premium">
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </select>
+            </div>
+            <div>
+              <label>Dislikes</label>
+              <input id="dislikes" placeholder="strawberry" />
+            </div>
+          </div>
+
+          <button type="submit">Get Recommendation</button>
+        </form>
+
+        <pre id="output">No result yet.</pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

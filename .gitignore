@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+playwright/.local-browsers/
+*.log
+swiggy-agent.db
