@@ -1,4 +1,6 @@
 export interface MenuItem {
+  id?: string;
+  requiresCustomization?: boolean;
   name: string;
   price: number;
   category: string;

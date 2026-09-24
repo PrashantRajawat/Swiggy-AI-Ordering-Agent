@@ -22,6 +22,10 @@ export function nextStep(
 }
 
 export function normalizePreferences(prefs: Partial<Preferences>): Preferences {
+  if (!Number.isFinite(prefs.budget) || (prefs.budget ?? 0) <= 0) throw new Error("Budget must be a positive number.");
+  if (!Number.isInteger(prefs.quantity) || (prefs.quantity ?? 0) < 1 || (prefs.quantity ?? 0) > 6) {
+    throw new Error("Choose between 1 and 6 people.");
+  }
   return {
     budget: prefs.budget ?? 300,
     quantity: prefs.quantity ?? 1,

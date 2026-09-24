@@ -19,5 +19,6 @@ export interface UserProfile {
 
 export interface UserRequest {
   message: string;
+  addressId?: string;
   preferences?: Partial<Preferences>;
 }

@@ -6,6 +6,8 @@ export interface Restaurant {
   rating: number;
   deliveryTime: number;
   deliveryFee: number;
+  distanceKm?: number;
+  pricingIsEstimate?: boolean;
   items: MenuItem[];
 }
 

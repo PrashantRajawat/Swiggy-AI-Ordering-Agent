@@ -1,35 +1,16 @@
 import { SwiggyMcpClient } from "./client";
 
-export interface PlaceOrderInput {
-  restaurantId: string;
-  itemNames: string[];
-  finalPrice: number;
-}
-
-export interface OrderResult {
-  orderId: string;
-  status: "placed" | "failed";
-}
-
+// Checkout has no UI/API route yet. A caller must review the current cart,
+// address and payment method with the user before setting confirmed=true.
 export class OrdersMcpService {
   constructor(private readonly client: SwiggyMcpClient) {}
 
-  async placeOrder(input: PlaceOrderInput): Promise<OrderResult> {
-    return this.client.invokeTool<OrderResult>(
-      "place_order",
-      input as unknown as Record<string, unknown>,
-      () => ({
-        orderId: `mock-${Date.now()}`,
-        status: "placed",
-      }),
-    );
+  async placeOrder(input: { addressId: string; paymentMethod: string }, confirmed: boolean): Promise<unknown> {
+    if (!confirmed) throw new Error("Explicit order confirmation is required.");
+    return this.client.invokeTool("place_food_order", input, () => ({ orderId: `mock-${Date.now()}`, status: "placed" }));
   }
 
-  async trackOrder(orderId: string): Promise<{ orderId: string; status: string }> {
-    return this.client.invokeTool<{ orderId: string; status: string }>(
-      "track_order",
-      { orderId },
-      () => ({ orderId, status: "confirmed" }),
-    );
+  async trackOrder(orderId: string): Promise<unknown> {
+    return this.client.invokeTool("track_food_order", { orderId }, () => ({ orderId, status: "confirmed" }));
   }
 }
