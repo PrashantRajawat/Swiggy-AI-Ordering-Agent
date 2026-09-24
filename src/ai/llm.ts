@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { extractDishQuery, resolveDishQuery } from "../recommendation/relevance";
 import { z } from "zod";
 import {
   FOLLOW_UP_PROMPT,
@@ -8,6 +9,7 @@ import {
 import { parseBudgetFromText, parseQuantityFromText } from "../utils/parser";
 
 const intentSchema = z.object({
+  dishQuery: z.string().trim().min(1).nullable().default(null),
   flavors: z.array(z.string()).default([]),
   dislikes: z.array(z.string()).default([]),
   premium: z.boolean().nullable().default(null),
@@ -52,6 +54,7 @@ export class LlmClient {
 
       return {
         ...parsed.data,
+        dishQuery: resolveDishQuery(message, parsed.data.dishQuery),
         budget: parsed.data.budget ?? fallback.budget,
         quantity: parsed.data.quantity ?? fallback.quantity,
       };
@@ -100,6 +103,7 @@ export class LlmClient {
     const dislikes = Array.from(lower.matchAll(/no\s+([a-z]+)/g)).map((m) => m[1]);
 
     return {
+      dishQuery: extractDishQuery(message),
       flavors: Array.from(new Set(flavors)),
       dislikes,
       premium: /premium|best quality/.test(lower) ? true : null,

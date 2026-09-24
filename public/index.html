@@ -12,6 +12,15 @@
         <h1>Swiggy AI Ordering Agent</h1>
         <p>Personal assistant for best food combinations.</p>
 
+        <p id="connection-status" role="status">Checking Swiggy connection…</p>
+        <button id="connect-swiggy" type="button" hidden>Connect Swiggy</button>
+        <button id="retry-addresses" type="button" hidden>Retry loading addresses</button>
+        <div id="address-panel" hidden>
+          <label for="address">Delivery address</label>
+          <select id="address"><option value="">Choose your saved address</option></select>
+          <button id="more-addresses" type="button" hidden>Load more addresses</button>
+        </div>
+
         <form id="recommend-form">
           <label>What are you craving?</label>
           <input id="query" placeholder="Chocolate waffles" required />
@@ -23,7 +32,7 @@
             </div>
             <div>
               <label>People</label>
-              <input id="quantity" type="number" min="1" value="2" />
+              <input id="quantity" type="number" min="1" max="6" value="2" />
             </div>
           </div>
 
@@ -44,7 +53,8 @@
           <button type="submit">Get Recommendation</button>
         </form>
 
-        <pre id="output">No result yet.</pre>
+        <p>Live prices are estimates before checkout fees and discounts. Recommendations do not change your cart.</p>
+        <pre id="output" aria-live="polite">No result yet.</pre>
       </section>
     </main>
 
