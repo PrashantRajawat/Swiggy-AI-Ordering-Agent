@@ -33,5 +33,7 @@ export function normalizePreferences(prefs: Partial<Preferences>): Preferences {
     dislikes: prefs.dislikes ?? [],
     premium: prefs.premium ?? false,
     deliveryTimeWeight: prefs.deliveryTimeWeight ?? 1,
+    bestDeal: prefs.bestDeal ?? false,
+    preferredRestaurants: prefs.preferredRestaurants ?? [],
   };
 }

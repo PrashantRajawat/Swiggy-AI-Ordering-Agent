@@ -109,7 +109,25 @@ export class SwiggyMcpClient {
       signal: AbortSignal.timeout(this.config.timeoutMs),
       redirect: "error",
     });
-    if (!response.ok) throw new Error(`Swiggy authorization failed (HTTP ${response.status}). Check the registered redirect URI.`);
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = await response.clone().json() as Record<string, unknown>;
+        const errorText = typeof payload.error_description === "string" ? payload.error_description
+          : typeof payload.error === "string" ? payload.error
+          : typeof payload.message === "string" ? payload.message
+          : "";
+        if (errorText) detail = `: ${errorText}`;
+      } catch {
+        // Swiggy may return a non-JSON error body or a generic HTML page.
+      }
+      if (path === "/auth/register") {
+        throw new Error(
+          `Swiggy rejected local client registration${detail}. This app is not whitelisted for local OAuth sign-in yet. Use a Swiggy-approved client ID in SWIGGY_MCP_CLIENT_ID or ask Swiggy to allow this localhost redirect URI.`,
+        );
+      }
+      throw new Error(`Swiggy authorization failed (HTTP ${response.status})${detail}. Check the registered redirect URI and client ID.`);
+    }
     return response.json();
   }
 

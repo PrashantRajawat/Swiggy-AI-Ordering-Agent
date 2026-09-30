@@ -52,6 +52,8 @@ export class AgentOrchestrator {
         premium: request.preferences?.premium ?? (intent.premium ?? undefined),
         budget: request.preferences?.budget ?? (intent.budget ?? undefined),
         quantity: request.preferences?.quantity ?? (intent.quantity ?? undefined),
+        bestDeal: request.preferences?.bestDeal ?? (intent.bestDeal ?? undefined),
+        preferredRestaurants: request.preferences?.preferredRestaurants ?? (intent.preferredRestaurants ?? undefined),
       },
     );
 
@@ -69,7 +71,7 @@ export class AgentOrchestrator {
     const preferences = normalizePreferences(merged);
     logger.info("Searching restaurants via Swiggy MCP", { message: request.message, preferences });
 
-    const restaurants = await this.tools.searchRestaurantsWithMenus(dishQuery, request.addressId);
+    const restaurants = await this.tools.searchRestaurantsWithMenus(dishQuery, request.addressId, preferences.preferredRestaurants ?? []);
     const coupons: Coupon[] = await this.tools.getAvailableCoupons();
 
     const result = optimizeRestaurants(restaurants, preferences, coupons, dishQuery);
@@ -87,6 +89,24 @@ export class AgentOrchestrator {
           finalPrice: 0,
           coupon: null,
           explanation,
+        },
+      };
+    }
+
+    if (result.best.finalPrice > preferences.budget) {
+      const explanation = `The cheapest available ${dishQuery} option is INR ${result.best.finalPrice}, which is above your budget. This is the best deal found after applying the best available coupon and restaurant delivery fee.`;
+      return {
+        status: "ready",
+        recommendation: {
+          restaurant: result.best.restaurant.name,
+          items: result.best.combination.items.map((item) => item.name),
+          subtotal: result.best.combination.subtotal + result.best.restaurant.deliveryFee,
+          finalPrice: result.best.finalPrice,
+          coupon: result.best.coupon.coupon?.couponCode ?? null,
+          explanation,
+          pricingIsEstimate: Boolean(result.best.restaurant.pricingIsEstimate),
+          distanceKm: result.best.restaurant.distanceKm,
+          deliveryTimeMinutes: result.best.restaurant.deliveryTime || undefined,
         },
       };
     }

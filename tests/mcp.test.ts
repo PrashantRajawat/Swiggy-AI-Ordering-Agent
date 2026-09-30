@@ -1,15 +1,21 @@
+/// <reference types="node" />
+
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
+import { LlmClient } from "../src/ai/llm";
 import { SwiggyMcpClient, SwiggyAuthError, decodeToolResult } from "../src/mcp/client";
 import { AddressMcpService } from "../src/mcp/address";
 import { RestaurantMcpService } from "../src/mcp/restaurant";
-import { MenuMcpService } from "../src/mcp/menu";
-import { OffersMcpService } from "../src/mcp/offers";
+import { MenuMcpService, normalizeMenuPage } from "../src/mcp/menu";
+import { normalizeCoupons, OffersMcpService } from "../src/mcp/offers";
 import { OrdersMcpService } from "../src/mcp/orders";
 import { generateCombinations } from "../src/recommendation/combinations";
+import { extractDishQuery, dishRelevance } from "../src/recommendation/relevance";
+import { optimizeRestaurants } from "../src/recommendation/optimizer";
+import { parseToolData, SwiggyResponseError } from "../src/mcp/validation";
 
 async function fixture(directPayload = false, groupedMenu = false) {
   const calls: Array<{ method: string; params?: any }> = [];
@@ -156,6 +162,64 @@ test("PKCE registration, one-use state, client identity and token expiry", async
   } finally { await f.close(); }
 });
 
+test("local client registration rejections tell the user to use an approved client", async () => {
+  const server = createServer(async (req, res) => {
+    if (req.url === "/auth/register") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "local_application_not_whitelisted", error_description: "This client isn't supported for Swiggy MCP sign-in yet." }));
+      return;
+    }
+    res.writeHead(500).end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/food`;
+  const client = new SwiggyMcpClient({ endpoint, useMock: false, redirectUri: "http://localhost:3000/api/mcp/auth/callback", timeoutMs: 2000 });
+  try {
+    await assert.rejects(client.startAuthorization(), /whitelisted|approved client|SWIGGY_MCP_CLIENT_ID/i);
+  } finally {
+    await client.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("deal intent parser recognizes preferred restaurants and coupon-first best-value requests", () => {
+  const client = new LlmClient();
+  const intent = client["fallbackIntent"]("Kunafa waffle from either Belgian Waffle or Waffle Co under 400 with best deal and coupon");
+  assert.equal(intent.dishQuery, "kunafa waffle");
+  assert.deepEqual(intent.preferredRestaurants, ["Belgian Waffle", "Waffle Co"]);
+  assert.equal(intent.bestDeal, true);
+  assert.equal(intent.budget, 400);
+});
+
+test("dish extractor removes restaurant clauses while preserving garlic naan dish names", () => {
+  assert.equal(extractDishQuery("butter chicken garlic naan from either belgian waffle or waffle co under 400 with best deal and coupon"), "butter chicken garlic naan");
+  assert.equal(extractDishQuery("butter chicken garlic naan under 400 with best deal and coupon"), "butter chicken garlic naan");
+});
+
+test("optimizer keeps the cheapest above-budget deal when no option fits the budget", () => {
+  const restaurant = {
+    id: "r1",
+    name: "Belgian Waffle",
+    rating: 4.5,
+    deliveryTime: 20,
+    deliveryFee: 100,
+    items: [{ id: "i1", name: "Kunafa Waffle", price: 330, category: "Waffles", available: true }],
+  };
+  const result = optimizeRestaurants([restaurant], {
+    budget: 350,
+    quantity: 1,
+    flavors: [],
+    dislikes: [],
+    premium: false,
+    deliveryTimeWeight: 1,
+  }, [], "kunafa waffle");
+  assert.ok(result.best);
+  assert.equal(result.best?.restaurant.name, "Belgian Waffle");
+  assert.equal(result.best?.finalPrice, 430);
+  assert.equal(result.best?.coupon.coupon, null);
+});
+
 test("authentication failure clears session; orders require confirmation and are never retried", async () => {
   const f = await fixture();
   try {
@@ -186,6 +250,19 @@ test("mock mode stays offline and real menu combination work is bounded", async 
   assert.deepEqual(generateCombinations(items, 1.5), []);
 });
 
+test("restaurant coupon payloads are normalized and kept per restaurant", () => {
+  const coupons = normalizeCoupons({
+    coupon_sections: [{
+      coupons: [
+        { couponCode: "SWIGGY200", discount: 200, minimum_order: 599, eligible: true, type: "flat" },
+        { coupon_code: "SAVE10", discount: 10, minimumOrder: 299, eligible: true, type: "percent", max_discount: 80 },
+      ],
+    }],
+  });
+  assert.deepEqual(coupons.map((coupon) => coupon.couponCode).sort(), ["SAVE10", "SWIGGY200"]);
+  assert.equal(coupons.find((coupon) => coupon.couponCode === "SAVE10")?.type, "percent");
+});
+
 
 test("direct Swiggy tool payloads work in both JSON text and structured content", async () => {
   const f = await fixture(true);
@@ -207,12 +284,11 @@ test("nested payloads unwrap while error responses still fail", () => {
 });
 
 test("upstream schema errors identify the tool and field without exposing values", async () => {
-  const { parseToolData, SwiggyResponseError } = await import("../src/mcp/validation");
   const { z } = await import("zod");
   assert.throws(() => parseToolData("get_restaurant_menu", z.object({ items: z.array(z.object({ price: z.number() })) }), {
     items: [{ price: "private-value" }],
   }), (error: unknown) => {
-    assert.ok(error instanceof SwiggyResponseError);
+    if (!(error instanceof SwiggyResponseError)) return false;
     assert.match(error.message, /get_restaurant_menu/);
     assert.match(error.message, /items.0.price/);
     assert.match(error.message, /received string/);
@@ -236,14 +312,12 @@ test("live category menus are paginated and deduplicated without losing category
 });
 
 test("unexpected menu shapes are upstream errors, not invalid user input", async () => {
-  const { normalizeMenuPage } = await import("../src/mcp/menu");
   assert.throws(() => normalizeMenuPage({ restaurant: { isOpen: true } }), /get_restaurant_menu.*items/);
   assert.deepEqual(normalizeMenuPage({ restaurant: { isOpen: false }, categories: [], hasMore: true }).items, []);
   assert.equal(normalizeMenuPage({ restaurant: { isOpen: false }, categories: [], hasMore: true }).hasMore, false);
 });
 
 test("protein roll items keep their main dish when a dip or add-on is named alongside it", async () => {
-  const { dishRelevance } = await import("../src/recommendation/relevance");
   const valid = [
     { name: "Chicken Roll - BBQ Dip", category: "Chicken Rolls", price: 150 },
     { name: "Chicken Roll with Mayo", category: "Chicken Rolls", price: 160 },

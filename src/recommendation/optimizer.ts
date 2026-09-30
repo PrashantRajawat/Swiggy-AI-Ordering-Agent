@@ -23,6 +23,7 @@ export function optimizeRestaurants(
   const ranked: RankedOption[] = [];
   let matchingItemCount = 0;
   let lowestPrice: number | null = null;
+  let fallbackBest: RankedOption | null = null;
 
   for (const restaurant of restaurants) {
     const filtered = excludeDislikedItems(
@@ -37,23 +38,26 @@ export function optimizeRestaurants(
     );
 
     for (const combo of combos) {
-      const coupon = bestCouponForSubtotal(combo.subtotal + restaurant.deliveryFee, coupons);
+      const restaurantCoupons = restaurant.coupons?.length ? restaurant.coupons : coupons;
+      const coupon = bestCouponForSubtotal(combo.subtotal + restaurant.deliveryFee, restaurantCoupons);
       lowestPrice = Math.min(lowestPrice ?? Infinity, coupon.finalPrice);
-      if (coupon.finalPrice > preferences.budget) {
-        continue;
-      }
-      const score = scoreOption(restaurant, combo, coupon, preferences, dishQuery);
-      ranked.push({
+      const option = {
         restaurant,
         combination: combo,
         coupon,
-        score,
+        score: scoreOption(restaurant, combo, coupon, preferences, dishQuery),
         finalPrice: coupon.finalPrice,
-      });
+      };
+      if (coupon.finalPrice <= preferences.budget) {
+        ranked.push(option);
+      } else if (!fallbackBest || option.finalPrice < fallbackBest.finalPrice) {
+        fallbackBest = option;
+      }
     }
   }
 
-  ranked.sort((a, b) => {
+  const candidates = ranked.length ? ranked : fallbackBest ? [fallbackBest] : [];
+  candidates.sort((a, b) => {
     if (preferences.premium) {
       return b.score - a.score || a.finalPrice - b.finalPrice;
     }
@@ -63,5 +67,5 @@ export function optimizeRestaurants(
     return b.score - a.score;
   });
 
-  return { best: ranked[0] ?? null, ranked, matchingItemCount, lowestPrice };
+  return { best: candidates[0] ?? null, ranked: candidates, matchingItemCount, lowestPrice };
 }

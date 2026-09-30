@@ -21,6 +21,17 @@
           <button id="more-addresses" type="button" hidden>Load more addresses</button>
         </div>
 
+        <div id="payment-panel" class="row compact-row">
+          <div>
+            <label for="payment-method">Payment method</label>
+            <select id="payment-method">
+              <option value="Cash">Cash</option>
+              <option value="UPI">UPI</option>
+              <option value="Wallet">Wallet</option>
+            </select>
+          </div>
+        </div>
+
         <form id="recommend-form">
           <label>What are you craving?</label>
           <input id="query" placeholder="Chocolate waffles" required />
@@ -54,6 +65,18 @@
         </form>
 
         <p>Live prices are estimates before checkout fees and discounts. Recommendations do not change your cart.</p>
+
+        <section id="recommendation-card" class="recommendation-card" hidden>
+          <h2>Best deal</h2>
+          <div class="deal-row"><span>Restaurant</span><strong id="rec-restaurant">—</strong></div>
+          <div class="deal-row"><span>Items</span><strong id="rec-items">—</strong></div>
+          <div class="deal-row"><span>Subtotal</span><strong id="rec-subtotal">—</strong></div>
+          <div class="deal-row"><span>Coupon</span><strong id="rec-coupon">—</strong></div>
+          <div class="deal-row accent"><span>Final price</span><strong id="rec-final">—</strong></div>
+          <p id="rec-explanation" class="deal-explanation">—</p>
+          <button id="place-order" type="button">Place order</button>
+        </section>
+
         <pre id="output" aria-live="polite">No result yet.</pre>
       </section>
     </main>

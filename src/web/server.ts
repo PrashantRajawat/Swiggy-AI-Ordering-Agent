@@ -82,12 +82,30 @@ const recommendSchema = z.object({
   premium: z.boolean().optional(),
   dislikes: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
   deliveryTimeWeight: z.number().min(0).max(10).optional(),
+  bestDeal: z.boolean().optional(),
+  preferredRestaurants: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
 });
 
 app.post("/api/recommend", async (req, res) => {
   try {
     const { query, addressId, ...preferences } = recommendSchema.parse(req.body);
     res.json(await orchestrator.handleRequest({ message: query, addressId, preferences }));
+  } catch (error) { sendError(res, error); }
+});
+
+const orderSchema = z.object({
+  addressId: z.string().min(1),
+  paymentMethod: z.string().trim().min(1).max(80),
+  restaurantName: z.string().trim().min(1).max(120).optional(),
+  confirm: z.boolean().default(false),
+});
+
+app.post("/api/order", async (req, res) => {
+  try {
+    const { addressId, paymentMethod, restaurantName, confirm } = orderSchema.parse(req.body);
+    const { OrdersMcpService } = await import("../mcp/orders.js");
+    const order = await new OrdersMcpService(mcpClient).placeOrder({ addressId, paymentMethod }, confirm);
+    res.json({ ok: confirm, restaurantName, order });
   } catch (error) { sendError(res, error); }
 });
 
