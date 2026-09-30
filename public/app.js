@@ -7,10 +7,20 @@ const addressSelect = document.getElementById("address");
 const moreAddresses = document.getElementById("more-addresses");
 const retryAddresses = document.getElementById("retry-addresses");
 const recommendButton = form.querySelector('button[type="submit"]');
+const placeOrderButton = document.getElementById("place-order");
+const recommendationCard = document.getElementById("recommendation-card");
+const paymentMethodSelect = document.getElementById("payment-method");
+const recRestaurant = document.getElementById("rec-restaurant");
+const recItems = document.getElementById("rec-items");
+const recSubtotal = document.getElementById("rec-subtotal");
+const recCoupon = document.getElementById("rec-coupon");
+const recFinal = document.getElementById("rec-final");
+const recExplanation = document.getElementById("rec-explanation");
 let addressState = "idle";
 let addressError = "";
 let authenticated = false;
 let mode;
+let latestRecommendation = null;
 recommendButton.disabled = true;
 let addressPage = 0;
 
@@ -104,6 +114,52 @@ async function init() {
 }
 void init().catch((error) => { output.textContent = error.message; });
 
+function renderRecommendation(data) {
+  const rec = data?.recommendation;
+  latestRecommendation = rec && rec.restaurant && rec.restaurant !== "No matching restaurant found" ? rec : null;
+  if (!rec || !rec.restaurant) {
+    recommendationCard.hidden = true;
+    return;
+  }
+
+  recRestaurant.textContent = rec.restaurant;
+  recItems.textContent = rec.items.length ? rec.items.join(", ") : "No item match";
+  recSubtotal.textContent = `₹${Number(rec.subtotal ?? 0).toLocaleString("en-IN")}`;
+  recCoupon.textContent = rec.coupon || "None";
+  recFinal.textContent = `₹${Number(rec.finalPrice ?? 0).toLocaleString("en-IN")}`;
+  recExplanation.textContent = rec.explanation || "Best available deal found.";
+  recommendationCard.hidden = false;
+  placeOrderButton.hidden = !latestRecommendation;
+}
+
+async function placeBestDealOrder() {
+  if (!latestRecommendation || !addressSelect.value) {
+    output.textContent = mode === "live" ? "Choose a saved delivery address before placing the order." : "Address selection is not required in demo mode.";
+    return;
+  }
+  placeOrderButton.disabled = true;
+  output.textContent = "Placing order…";
+  try {
+    const result = await request("/api/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        addressId: addressSelect.value,
+        paymentMethod: paymentMethodSelect.value,
+        restaurantName: latestRecommendation.restaurant,
+        confirm: true,
+      }),
+    });
+    output.textContent = JSON.stringify({ ok: true, order: result }, null, 2);
+  } catch (error) {
+    output.textContent = error.message;
+  } finally {
+    placeOrderButton.disabled = false;
+  }
+}
+
+placeOrderButton.addEventListener("click", () => { void placeBestDealOrder(); });
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!mode) { output.textContent = "Wait for the connection check, or reload the page."; return; }
@@ -130,6 +186,7 @@ form.addEventListener("submit", async (event) => {
         deliveryTimeWeight: 1,
       }),
     });
+    renderRecommendation(data);
     output.textContent = JSON.stringify(data, null, 2);
   } catch (error) { output.textContent = error.message; }
   finally { updateRecommendButton(); }

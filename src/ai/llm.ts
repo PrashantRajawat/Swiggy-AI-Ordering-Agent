@@ -15,6 +15,8 @@ const intentSchema = z.object({
   premium: z.boolean().nullable().default(null),
   budget: z.number().nullable().default(null),
   quantity: z.number().nullable().default(null),
+  bestDeal: z.boolean().nullable().default(null),
+  preferredRestaurants: z.array(z.string()).default([]),
 });
 
 export type IntentExtraction = z.infer<typeof intentSchema>;
@@ -89,6 +91,16 @@ export class LlmClient {
     }
   }
 
+  private parsePreferredRestaurants(message: string): string[] {
+    const match = message.match(/(?:from|at|in|between|among)\s+(?:either\s+)?(.+?)(?=\s+(?:under|below|budget|for|with|best|deal|value|coupon|offer|today|please|order)\b|$)/i);
+    if (!match) return [];
+    const names = match[1]
+      .split(/\s*(?:,|\bor\b|\band\b)\s*/i)
+      .map((name) => name.replace(/\b(?:either)\b/gi, "").trim())
+      .filter((name) => name.length > 1 && !/^(?:under|below|budget|for|with|best|deal|coupon|offer|cheapest|cheap|order|please)$/i.test(name));
+    return [...new Set(names)];
+  }
+
   private fallbackIntent(message: string): IntentExtraction {
     const lower = message.toLowerCase();
     const flavors: string[] = [];
@@ -101,6 +113,8 @@ export class LlmClient {
     }
 
     const dislikes = Array.from(lower.matchAll(/no\s+([a-z]+)/g)).map((m) => m[1]);
+    const preferredRestaurants = this.parsePreferredRestaurants(message);
+    const bestDeal = /best deal|best value|cheapest|lowest price|coupon|offer|deal/.test(lower);
 
     return {
       dishQuery: extractDishQuery(message),
@@ -109,6 +123,8 @@ export class LlmClient {
       premium: /premium|best quality/.test(lower) ? true : null,
       budget: parseBudgetFromText(message) ?? null,
       quantity: parseQuantityFromText(message) ?? null,
+      bestDeal,
+      preferredRestaurants,
     };
   }
 

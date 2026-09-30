@@ -1,5 +1,7 @@
 import { MenuItem } from "./menu";
 
+import { Coupon } from "./coupon";
+
 export interface Restaurant {
   id: string;
   name: string;
@@ -9,6 +11,7 @@ export interface Restaurant {
   distanceKm?: number;
   pricingIsEstimate?: boolean;
   items: MenuItem[];
+  coupons?: Coupon[];
 }
 
 export interface RestaurantSearchResult {

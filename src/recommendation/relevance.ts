@@ -21,10 +21,12 @@ export function dishTokens(text: string): string[] {
 }
 
 export function extractDishQuery(message: string): string {
-  const text = message
+  const beforeRestaurant = message.split(/\b(?:from|at|in|between|among)\b/i)[0] ?? message;
+  const text = beforeRestaurant
     .replace(/\b(?:under|below|budget(?: of)?|up to|upto)\s*(?:rs\.?|inr|₹)?\s*\d+(?:\.\d+)?/gi, " ")
     .replace(/(?:₹|\brs\.?|\binr)\s*\d+(?:\.\d+)?/gi, " ")
     .replace(/\bfor\s+\d+(?:\s+(?:people|persons?))?/gi, " ")
+    .replace(/\b(?:best|deal|value|coupon|coupons|offer|offers|cheapest|lowest|restaurant|restaurants|shop|outlet)\b/gi, " ")
     .replace(/\b(?:no|without|avoid)\s+[\p{L}-]+/giu, " ");
   return dishTokens(text).filter((word) => !filler.has(word)).join(" ");
 }

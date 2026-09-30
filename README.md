@@ -38,7 +38,9 @@ SWIGGY_MCP_URL=https://mcp.swiggy.com/food
 SWIGGY_MCP_REDIRECT_URI=http://localhost:3000/api/mcp/auth/callback
 ```
 
-Click **Connect Swiggy**, complete Swiggy's phone/OTP flow in its browser page, then choose a delivery address. No token needs to be pasted into the web UI. `SWIGGY_MCP_CLIENT_ID` can be left blank for dynamic registration, or set to an existing registered public client.
+Click **Connect Swiggy**, complete Swiggy's phone/OTP flow in its browser page, then choose a delivery address. No token needs to be pasted into the web UI.
+
+If Swiggy says, “Local Application isn't whitelisted yet” or “This client isn't supported for Swiggy MCP sign-in yet”, that means Swiggy is rejecting the local dynamic registration flow. In that case, this project cannot complete browser sign-in with a blank or unapproved client ID. Set `SWIGGY_MCP_CLIENT_ID` to a Swiggy-approved public client, or ask Swiggy to whitelist your localhost app and redirect URI.
 
 Swiggy must accept your **exact** redirect URI. If registration or authorization rejects the callback, follow the official authentication documentation to register/allowlist it. Use the same hostname when opening the app as in the redirect URI (`localhost` by default). Production access is managed by Swiggy; this repo does not provision it.
 

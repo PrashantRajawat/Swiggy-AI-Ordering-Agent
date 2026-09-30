@@ -5,6 +5,8 @@ export interface Preferences {
   dislikes: string[];
   premium: boolean;
   deliveryTimeWeight: number;
+  bestDeal?: boolean;
+  preferredRestaurants?: string[];
 }
 
 export interface UserProfile {
