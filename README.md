@@ -2,11 +2,36 @@
 
 A personal food recommendation app with a CLI and a small web UI. It extracts preferences from natural language, searches menus, and compares item combinations within a budget.
 
+## Chat experience (phase 1)
+
+The web app now opens as **Crave**, a responsive orange-themed chat interface with suggested prompts, a history sidebar, streamed assistant replies, clickable follow-ups, and up to five recommendation cards. There are no required budget/quantity forms in the main flow. The agent carries dish, budget, quantity, diet and exclusions across messages; it defaults to one item/person, asks for a budget when missing, and can choose a ₹350 pizza search when invited to pick anything. Multi-dish requests such as pizza and garlic bread are assembled from one restaurant. Quantity still means menu items rather than inferred portions.
+
+Conversations, selected address, and editable preferences persist in SQLite. Each browser receives a random HttpOnly session cookie; chats and in-memory Swiggy clients are scoped to that session. This is **browser-local identity, not an app account**: clearing cookies loses access to that browser's history, and another browser/device does not share it. Swiggy tokens remain in memory, so reconnect after restarting the server. Web sessions deliberately do not inherit the CLI's environment access token.
+
+The onboarding dialog connects Swiggy and selects an address. Demo mode supports the same chat UI using sample addresses and food. With an OpenAI key, the agent extracts contextual updates and streams model-generated prose; without one, deterministic parsing and text chunks keep demo mode usable. The offline parser supports common prompts/refinements rather than unrestricted language understanding. Cards show menu-based estimates, rating/ETA where available, item quantities and demo discounts. Live coupons, customization, real cart totals, and checkout remain phase 2. The previous direct-order API is disabled so recommendation cards cannot place an unreviewed order.
+
+Preferences without “today”, “tonight”, “this time”, “this order”, or “for now” are remembered automatically. Settings edits apply to new chats. Dietary/allergen filters inspect menu names; they cannot certify ingredients or cross-contamination. Always verify allergies directly with the restaurant.
+
+This remains a localhost development app. Before public hosting, add real app-account authentication, secure persistent per-user Swiggy credentials, HTTPS, appropriate session/rate limits, and a deployment-compatible database. SQLite is sufficient for the current single-instance build and needs a persistent disk and backups. No hosting deployment is included in this phase.
+
+Chat source files:
+
+- `src/chat/agent.ts` — contextual extraction, follow-ups, multi-dish candidate generation, balanced price/rating ranking, and assistant streaming.
+- `src/chat/store.ts` — SQLite browser sessions, preferences, conversations and messages.
+- `public/` — chat interface, onboarding, cards, history and settings.
+
+Chat APIs (scoped to the session cookie):
+
+- `GET/PUT /api/profile` — preferences and selected address.
+- `GET/POST /api/chats` — history and conversation creation.
+- `GET/DELETE /api/chats/:id` — conversation retrieval/deletion.
+- `POST /api/chats/:id/messages` — accepts `{ "message": "..." }`; streams SSE `status`, `delta`, and `done` events. The completed reply and cards are saved even if the browser disconnects.
+
 ## Swiggy integration
 
 Live mode connects directly to **Swiggy's official Food MCP server**, `https://mcp.swiggy.com/food`, using `@modelcontextprotocol/sdk` and Streamable HTTP. There is no web scraping or separate localhost gateway.
 
-The client performs MCP initialization, discovers tools (including paginated catalogues), preserves the MCP session, and calls tools with `tools/call`. It accepts Swiggy's `{ success, data }` envelope and direct tool payloads from MCP structured content or JSON text content. Authentication uses Swiggy's dynamic client registration and OAuth PKCE endpoints; tokens remain in server memory and require sign-in again after expiry/restart. Tool calls are not automatically retried, to avoid duplicate mutations.
+The client performs MCP initialization, discovers tools (including paginated catalogues), preserves the MCP session, and calls tools with `tools/call`. It accepts Swiggy's `{ success, data }` envelope and direct tool payloads from MCP structured content or JSON text content. Authentication uses Swiggy's dynamic client registration and OAuth PKCE endpoints; tokens remain in server memory and require sign-in again after expiry/restart. Cart/order mutations are never automatically retried. Known read-only tools reconnect and retry once on HTTP 404 to recover an expired MCP session. HTTP 429 preserves the connection and starts a per-session cooldown using `Retry-After` (seconds or HTTP date), or an increasing precautionary delay starting at 60 seconds if absent/invalid. This is an earliest retry time, not a promise that Swiggy’s quota has reset. The UI shows a live-search pause countdown while leaving chat and preferences usable. A saved delivery address is reused on page load; opening the address picker explicitly loads the address list. Search failures preserve the parsed request so “Retry last search” keeps the dish and budget. Safe rate-limit diagnostics (operation, timestamp, retry-header availability and provider request ID when present) appear in local status/logs; no tokens or raw response bodies are included. calls are not automatically replayed when the cooldown ends. Other HTTP failures report the status and tool name without exposing upstream bodies. Saved addresses are cached for five minutes; searches and menus for one minute. Identical concurrent reads share one request, and caches are isolated per client and cleared on credential changes. Cached menu prices are refreshed at expiry and remain estimates.
 
 The recommendation flow is:
 
@@ -16,11 +41,11 @@ The recommendation flow is:
 4. Browse open restaurants using `get_restaurant_menu` with restaurant and address IDs. Both flat menus and paginated category menus are supported; duplicate item IDs are merged across categories.
 5. Compare in-stock, priced items and return a recommendation.
 
-Generating recommendations **does not update the cart or place an order**. Low-level adapters for `get_food_cart`, `update_food_cart`, `fetch_food_coupons`, `place_food_order` and `track_food_order` exist, but checkout is not connected to a UI/API route. The order adapter requires a confirmation flag; a future checkout flow must first show the actual cart, address, and available payment method to the user.
+Generating recommendations **does not update the cart or place an order**. Live recommendations skip cart-specific coupon requests. Low-level adapters for `get_food_cart`, `update_food_cart`, `fetch_food_coupons`, `place_food_order` and `track_food_order` exist, but checkout is disabled until a verified cart-review flow is implemented. The order adapter requires a confirmation flag; a future checkout flow must first show the actual cart, address, and available payment method to the user.
 
 ## Setup
 
-Requires Node.js 18.20+ (a supported LTS release is recommended).
+Requires Node.js v24.21.0. With nvm installed, run `nvm install` and `nvm use` to select the version pinned in `.nvmrc`.
 
 ```bash
 npm install
@@ -74,16 +99,16 @@ Tests use a local HTTP MCP fixture with JSON and SSE responses. They cover initi
 - `POST /api/recommend` — accepts `query`, `addressId` (required in live mode), `budget`, `quantity` (1–6), `premium`, `dislikes`, `deliveryTimeWeight`.
 - `GET /health` — local server health.
 
-This is a **single-user local application**. It binds to `127.0.0.1`, holds one Swiggy account in memory, and stores one preference history in SQLite. A hosted/multi-user deployment would need per-user authentication, token isolation, and preference storage.
+This is a **local development application** bound to `127.0.0.1`. The web chat isolates browser sessions and preferences; CLI preference history remains local. Public hosting requires app-account authentication and durable per-user credential handling.
 
 ## Pricing and recommendation limits
 
 - Live prices are **menu-based estimates**, not verified checkout totals. Delivery charges, tax, packaging, variants/add-ons, and coupons are excluded. Responses mark this with `pricingIsEstimate: true`; `subtotal` and `finalPrice` retain their existing field names for compatibility. Final checkout can exceed the entered budget.
 - Live coupon data is cart/restaurant-specific and does not provide the flat discount formula used by the demo optimizer. Demo coupons are never applied to live prices. Verified discounts require a future cart-review flow.
-- Value mode prioritizes estimated price; premium mode uses taste match, rating and delivery time. Missing rating/time signals currently use zero internally.
+- The legacy recommendation API prioritizes estimated price in value mode; premium mode uses taste match, rating and delivery time. The chat ranks a balance of price and rating, with delivery-time refinements. Missing rating/time signals currently use zero internally.
 - Search considers up to 10 restaurants and at most 10 category pages / 150 unique available items per restaurant. Individual categories can also be truncated by Swiggy. Combination enumeration is capped at 20,000 candidates per restaurant, ordered by item price; it is not an exhaustive optimum for large menus.
 - Number of people currently means number of menu items; it does not infer serving sizes.
-- Follow-up question generation exists, but neither interface maintains a full conversational session. Explanations are currently templates.
+- The web chat maintains persistent conversational state. The CLI remains a single request interface.
 
 ## Code map
 

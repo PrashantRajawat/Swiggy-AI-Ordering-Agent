@@ -1,86 +1,29 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Swiggy AI Ordering Agent</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <main class="shell">
-      <section class="card">
-        <h1>Swiggy AI Ordering Agent</h1>
-        <p>Personal assistant for best food combinations.</p>
-
-        <p id="connection-status" role="status">Checking Swiggy connection…</p>
-        <button id="connect-swiggy" type="button" hidden>Connect Swiggy</button>
-        <button id="retry-addresses" type="button" hidden>Retry loading addresses</button>
-        <div id="address-panel" hidden>
-          <label for="address">Delivery address</label>
-          <select id="address"><option value="">Choose your saved address</option></select>
-          <button id="more-addresses" type="button" hidden>Load more addresses</button>
-        </div>
-
-        <div id="payment-panel" class="row compact-row">
-          <div>
-            <label for="payment-method">Payment method</label>
-            <select id="payment-method">
-              <option value="Cash">Cash</option>
-              <option value="UPI">UPI</option>
-              <option value="Wallet">Wallet</option>
-            </select>
-          </div>
-        </div>
-
-        <form id="recommend-form">
-          <label>What are you craving?</label>
-          <input id="query" placeholder="Chocolate waffles" required />
-
-          <div class="row">
-            <div>
-              <label>Budget (INR)</label>
-              <input id="budget" type="number" min="1" value="350" />
-            </div>
-            <div>
-              <label>People</label>
-              <input id="quantity" type="number" min="1" max="6" value="2" />
-            </div>
-          </div>
-
-          <div class="row">
-            <div>
-              <label>Premium</label>
-              <select id="premium">
-                <option value="true">Yes</option>
-                <option value="false">No</option>
-              </select>
-            </div>
-            <div>
-              <label>Dislikes</label>
-              <input id="dislikes" placeholder="strawberry" />
-            </div>
-          </div>
-
-          <button type="submit">Get Recommendation</button>
-        </form>
-
-        <p>Live prices are estimates before checkout fees and discounts. Recommendations do not change your cart.</p>
-
-        <section id="recommendation-card" class="recommendation-card" hidden>
-          <h2>Best deal</h2>
-          <div class="deal-row"><span>Restaurant</span><strong id="rec-restaurant">—</strong></div>
-          <div class="deal-row"><span>Items</span><strong id="rec-items">—</strong></div>
-          <div class="deal-row"><span>Subtotal</span><strong id="rec-subtotal">—</strong></div>
-          <div class="deal-row"><span>Coupon</span><strong id="rec-coupon">—</strong></div>
-          <div class="deal-row accent"><span>Final price</span><strong id="rec-final">—</strong></div>
-          <p id="rec-explanation" class="deal-explanation">—</p>
-          <button id="place-order" type="button">Place order</button>
-        </section>
-
-        <pre id="output" aria-live="polite">No result yet.</pre>
-      </section>
-    </main>
-
-    <script src="/app.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="theme-color" content="#fc681b"/>
+  <title>Crave — your food, figured out</title><link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/" aria-label="Crave home"><span class="brand-mark">c.</span> crave<span class="brand-tag">AI</span></a>
+    <button class="new-chat" id="new-chat">＋ New craving</button>
+    <div class="sidebar-label">YOUR CONVERSATIONS</div>
+    <nav id="history" aria-label="Chat history"></nav>
+    <div class="sidebar-bottom"><div class="sidebar-note"><span>Made for your cravings.</span><small>A little less scrolling.<br/>A lot more eating.</small></div><button class="profile-button" id="open-settings"><span class="avatar">Y</span><span>Your preferences<small>Diet, allergies & budget</small></span><span>⚙</span></button></div>
+  </aside>
+  <main>
+    <header class="topbar"><div class="topbar-left"><button class="icon-button mobile-menu" id="toggle-sidebar" aria-label="Toggle chat history">☰</button><strong>Your food, figured out.</strong><span id="mode-badge" class="badge">Connecting</span></div><button id="change-address" class="address-button">⌖ <span id="current-address">Choose delivery address</span></button></header>
+    <div class="connection-banner" id="connection-banner" hidden><span id="connection-status" role="status"></span><button id="connect-swiggy" hidden>Connect Swiggy</button><button id="retry-addresses" hidden>Retry addresses</button></div>
+    <section id="conversation" class="conversation" aria-label="Conversation">
+      <div id="welcome" class="welcome"><div class="eyebrow"><span class="spark">✳</span> GOOD FOOD. ZERO GUESSWORK.</div><h1>Big cravings.<br/><span>Meet your match.</span></h1><p>Tell me what sounds good. I’ll find the food,<br class="desktop-break"/> compare the options, and make choosing easy.</p><div class="prompt-grid" id="starter-prompts"><button data-prompt="Find me pizza under ₹350"><span class="prompt-icon">◔</span><strong>A pizza kind of day</strong><small>Find me pizza under ₹350</small><span class="prompt-plus">＋</span></button><button data-prompt="Chocolate waffles for two under ₹500"><span class="prompt-icon">▦</span><strong>Something sweet to share</strong><small>Chocolate waffles for two, under ₹500</small><span class="prompt-plus">＋</span></button><button data-prompt="Vegetarian pizza under ₹400"><span class="prompt-icon">❋</span><strong>Keep it green</strong><small>Vegetarian pizza under ₹400</small><span class="prompt-plus">＋</span></button><button data-prompt="Anything is fine, surprise me"><span class="prompt-icon">✦</span><strong>You pick. I’ll eat.</strong><small>Surprise me with a good deal</small><span class="prompt-plus">＋</span></button></div><div class="welcome-footnote">A craving is all you need. We’ll figure out the rest.</div></div>
+      <div id="messages" class="messages" role="log" aria-label="Chat messages"></div>
+    </section>
+    <footer class="composer-area"><div id="chat-status" class="chat-status" role="status"></div><form id="chat-form" class="composer"><label class="sr-only" for="message">Tell me what you’re craving</label><textarea id="message" rows="1" maxlength="2000" placeholder="What are you craving?" required></textarea><div class="composer-bottom"><span>✳ Your next good meal starts here</span><button type="submit" id="send" aria-label="Send message">Send <span>＋</span></button></div></form><p class="composer-note">Menu prices may exclude taxes & fees. No orders are placed in this preview.</p></footer>
+  </main>
+  <dialog id="onboarding"><div class="dialog-heading"><span class="brand-mark">c.</span><div><h2>Good food starts here.</h2><p>Connect Swiggy and choose where we’re delivering.</p></div></div><p id="onboarding-status" role="status"></p><button id="onboarding-connect" class="primary">Connect Swiggy</button><div id="address-panel" hidden><label for="address">DELIVER TO</label><select id="address"><option value="">Choose your saved address</option></select><button id="more-addresses" class="subtle" hidden>Load more addresses</button><button id="continue-chat" class="primary">Let’s find something good</button></div><button id="close-onboarding" class="subtle">Close</button></dialog>
+  <dialog id="settings"><div class="dialog-title"><h2>Make it your kind of food.</h2><button id="close-settings" class="icon-button" aria-label="Close preferences">×</button></div><p>Saved for future chats. Say “today” to keep a chat preference temporary.</p><form id="settings-form"><label for="saved-budget">Usual budget (₹)</label><input id="saved-budget" type="number" min="1" max="100000" placeholder="Ask me each time"/><label for="saved-diet">Dietary preference</label><select id="saved-diet"><option value="any">No preference</option><option value="vegetarian">Vegetarian</option><option value="vegan">Vegan</option></select><label for="saved-allergies">Allergies (comma separated)</label><input id="saved-allergies" maxlength="500" placeholder="e.g. peanuts, shellfish"/><label for="saved-dislikes">Ingredients you avoid</label><input id="saved-dislikes" maxlength="500" placeholder="e.g. mushrooms, olives"/><p class="settings-note">Menu-name filtering cannot verify ingredients or cross-contamination. Confirm allergies directly with the restaurant.</p><button class="primary" type="submit">Save preferences</button><p id="settings-status" role="status"></p></form></dialog>
+  <script src="/app.js"></script>
+</body>
 </html>

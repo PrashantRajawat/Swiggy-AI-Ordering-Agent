@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { z } from "zod";
+import { logger } from "../utils/logger";
 
 export interface SwiggyMcpConfig {
   endpoint: string;
@@ -14,6 +15,29 @@ export interface SwiggyMcpConfig {
 }
 
 export class SwiggyAuthError extends Error {}
+
+export class SwiggyTransportError extends Error {
+  constructor(readonly status: number | undefined, readonly operation: string) {
+    const code = status && status > 0 ? ` (HTTP ${status})` : "";
+    const advice = status === 403 ? "Swiggy denied access. Reconnect your account; if this persists, check the app’s MCP permissions."
+      : status === 404 ? "The MCP session or endpoint was not found. Try again to establish a new session."
+      : status === 429 ? "Swiggy is limiting requests. Wait a moment before trying again."
+      : status && status >= 500 ? "Swiggy is temporarily unavailable. Please try again shortly."
+      : status === 400 ? "Swiggy rejected the request. Try again; if this persists, the tool’s input requirements may have changed."
+      : "Check your connection and try again.";
+    super(`Swiggy could not complete ${operation}${code}. ${advice}`);
+    this.name = "SwiggyTransportError";
+  }
+}
+export class SwiggyRateLimitError extends SwiggyTransportError {
+  constructor(readonly retryAt: number, operation: string, readonly source: "upstream" | "local_cooldown" = "local_cooldown", resetProvided = false) {
+    super(429, operation);
+    this.name = "SwiggyRateLimitError";
+    this.message = `${source === "upstream" ? "Swiggy rejected the live request (HTTP 429)." : "Live requests are paused after Swiggy returned HTTP 429."} ${resetProvided ? "Swiggy supplied a minimum retry delay." : "Swiggy did not provide a usable reset time; the app is pausing requests as a precaution."} Earliest retry in ${Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))} seconds; recovery is not guaranteed. Your account is still connected. You can continue chatting or update preferences.`;
+  }
+}
+const CACHE_TTLS: Record<string, number> = { get_addresses: 300000, search_restaurants: 60000, get_restaurant_menu: 60000 };
+const READ_ONLY_TOOLS = new Set(["get_addresses", "search_restaurants", "get_restaurant_menu", "get_food_cart", "fetch_food_coupons", "track_food_order"]);
 
 // Swiggy returns its envelope inside MCP structuredContent or JSON text content.
 export function decodeToolResult(raw: unknown): unknown {
@@ -60,6 +84,15 @@ export class SwiggyMcpClient {
   private connection?: Promise<Client>;
   private toolCatalog: Array<{ name: string; inputSchema: unknown }> = [];
   private expiresAt?: number;
+  private retryAt = 0;
+  private rateLimit?: { operation: string; receivedAt: number; consecutive: number; retryAfterProvided: boolean; requestId?: string };
+  private readonly cache = new Map<string, { expires: number; value: unknown }>();
+  private readonly inFlight = new Map<string, Promise<unknown>>();
+
+  getRetryAt(): number | undefined { return this.retryAt > Date.now() ? this.retryAt : undefined; }
+  private checkCooldown(operation: string): void {
+    if (this.getRetryAt()) throw new SwiggyRateLimitError(this.retryAt, operation, "local_cooldown", this.rateLimit?.retryAfterProvided);
+  }
   private readonly oauthSessions = new Map<string, { verifier: string; createdAt: number }>();
 
   constructor(config: Partial<SwiggyMcpConfig> = {}) {
@@ -82,8 +115,8 @@ export class SwiggyMcpClient {
   hasAccessToken(): boolean {
     return Boolean(this.config.accessToken) && (!this.expiresAt || Date.now() < this.expiresAt);
   }
-  getStatus(): { mode: "mock" | "live"; authenticated: boolean } {
-    return { mode: this.isMockMode() ? "mock" : "live", authenticated: this.hasAccessToken() };
+  getStatus(): { mode: "mock" | "live"; authenticated: boolean; retryAt?: number; rateLimit?: { operation: string; receivedAt: number; consecutive: number; retryAfterProvided: boolean; requestId?: string } } {
+    return { mode: this.isMockMode() ? "mock" : "live", authenticated: this.hasAccessToken(), ...(this.getRetryAt() ? { retryAt: this.retryAt } : {}), ...(this.rateLimit ? { rateLimit: this.rateLimit } : {}) };
   }
 
   async close(): Promise<void> {
@@ -97,6 +130,8 @@ export class SwiggyMcpClient {
 
   async setAccessToken(token: string, expiresIn?: number): Promise<void> {
     await this.close();
+    this.cache.clear();
+    this.inFlight.clear();
     this.config.accessToken = token;
     this.expiresAt = expiresIn ? Date.now() + expiresIn * 1000 : undefined;
   }
@@ -180,6 +215,30 @@ export class SwiggyMcpClient {
         const client = new Client({ name: "swiggy-ai-ordering-agent", version: "0.1.0" });
         const transport = new StreamableHTTPClientTransport(new URL(this.config.endpoint), {
           requestInit: { headers: { Authorization: `Bearer ${this.config.accessToken}` } },
+          fetch: async (url, init) => {
+            this.checkCooldown("MCP request");
+            const response = await fetch(url, init);
+            if (response.status === 429) {
+              const header = response.headers.get("retry-after");
+              const seconds = header && /^\d+(?:\.\d+)?$/.test(header.trim()) ? Number(header) : NaN;
+              const until = Number.isFinite(seconds) ? Date.now() + Math.max(1, seconds) * 1000 : header ? Date.parse(header) : NaN;
+              const provided = Number.isFinite(until) && until > Date.now();
+              const consecutive = (this.rateLimit?.consecutive ?? 0) + 1;
+              this.retryAt = Math.max(this.retryAt, provided ? until : Date.now() + Math.min(900000, 60000 * 2 ** Math.min(4, consecutive - 1)));
+              let operation = init?.method || "MCP request";
+              try {
+                const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+                operation = body?.method === "tools/call" ? String(body.params?.name) : body?.method || operation;
+              } catch { /* Only retain the operation, never arguments or raw bodies. */ }
+              const reference = response.headers.get("x-request-id");
+              this.rateLimit = { operation, receivedAt: Date.now(), consecutive, retryAfterProvided: provided,
+                ...(reference && /^[a-zA-Z0-9_.:-]{1,160}$/.test(reference) ? { requestId: reference } : {}) };
+              logger.warn("Swiggy gateway returned HTTP 429", { ...this.rateLimit, retryAt: this.retryAt });
+            } else if (response.ok && init?.method === "POST") {
+              this.rateLimit = undefined;
+            }
+            return response;
+          },
         });
         try {
           await client.connect(transport, { timeout: this.config.timeoutMs });
@@ -203,13 +262,27 @@ export class SwiggyMcpClient {
     catch (error) { this.connection = undefined; throw error; }
   }
 
-  private async authenticated<T>(operation: () => Promise<T>): Promise<T> {
+  private async authenticated<T>(operation: () => Promise<T>, label = "MCP connection"): Promise<T> {
+    this.checkCooldown(label);
     try { return await operation(); }
     catch (error) {
       if (error instanceof UnauthorizedError || (error instanceof StreamableHTTPError && [401, 419].includes(error.code ?? 0))) {
         this.config.accessToken = undefined;
-        await this.close();
+        this.cache.clear();
+        await this.close().catch(() => undefined);
         throw new SwiggyAuthError("Your Swiggy session expired. Connect Swiggy again.");
+      }
+      if (error instanceof StreamableHTTPError || error instanceof TypeError && /fetch failed/i.test(error.message)) {
+        const status = error instanceof StreamableHTTPError ? error.code : undefined;
+        // Do not log upstream bodies, headers or arguments: they can contain account data.
+        logger.warn("Swiggy MCP transport request failed", { operation: label, status });
+        if (status === 429) {
+          // Keep the authenticated transport: reconnecting would add more requests.
+          this.retryAt = Math.max(this.retryAt, Date.now() + 1000);
+          throw new SwiggyRateLimitError(this.retryAt, label, "upstream", this.rateLimit?.retryAfterProvided);
+        }
+        await this.close().catch(() => undefined);
+        throw new SwiggyTransportError(status, label);
       }
       throw error;
     }
@@ -225,12 +298,39 @@ export class SwiggyMcpClient {
 
   async invokeTool<T>(name: string, input: Record<string, unknown>, mockHandler: () => Promise<T> | T): Promise<T> {
     if (this.isMockMode()) return mockHandler();
-    // No automatic retries: cart/order tools can have non-idempotent side effects.
-    return this.authenticated(async () => {
-      const client = await this.connect();
-      if (!this.toolCatalog.some((tool) => tool.name === name)) throw new Error(`Swiggy does not currently advertise the ${name} tool.`);
-      const result = await client.callTool({ name, arguments: input }, undefined, { timeout: this.config.timeoutMs });
+    const ttl = CACHE_TTLS[name];
+    const key = JSON.stringify([name, input]);
+    if (ttl) {
+      const cached = this.cache.get(key);
+      if (cached && cached.expires > Date.now() && this.hasAccessToken()) return structuredClone(cached.value) as T;
+      if (this.inFlight.has(key)) return structuredClone(await this.inFlight.get(key)) as T;
+    }
+    const operation = this.authenticated(async () => {
+      const call = async () => {
+        const client = await this.connect();
+        if (!this.toolCatalog.some((tool) => tool.name === name)) throw new Error(`Swiggy does not currently advertise the ${name} tool.`);
+        return client.callTool({ name, arguments: input }, undefined, { timeout: this.config.timeoutMs });
+      };
+      let result;
+      try { result = await call(); }
+      catch (error) {
+        // A server can expire its MCP session while the OAuth token remains valid.
+        // Reinitialize once for known read operations; never replay a cart/order mutation.
+        if (!(error instanceof StreamableHTTPError && error.code === 404 && READ_ONLY_TOOLS.has(name))) throw error;
+        await this.close().catch(() => undefined);
+        result = await call();
+      }
       return decodeToolResult(result) as T;
-    });
+    }, name);
+    if (!ttl) return operation;
+    this.inFlight.set(key, operation);
+    try {
+      const value = await operation;
+      // Bound cached menu/account data to this client and a short lifetime.
+      for (const [cacheKey, entry] of this.cache) if (entry.expires <= Date.now()) this.cache.delete(cacheKey);
+      if (this.cache.size >= 200) this.cache.delete(this.cache.keys().next().value!);
+      this.cache.set(key, { expires: Date.now() + ttl, value: structuredClone(value) });
+      return structuredClone(value);
+    } finally { this.inFlight.delete(key); }
   }
 }
