@@ -6,7 +6,8 @@ import { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { LlmClient } from "../src/ai/llm";
-import { SwiggyMcpClient, SwiggyAuthError, decodeToolResult } from "../src/mcp/client";
+import { SwiggyMcpClient, SwiggyAuthError, SwiggyTransportError, SwiggyRateLimitError, decodeToolResult } from "../src/mcp/client";
+import { ToolOrchestrator } from "../src/agent/toolOrchestrator";
 import { AddressMcpService } from "../src/mcp/address";
 import { RestaurantMcpService } from "../src/mcp/restaurant";
 import { MenuMcpService, normalizeMenuPage } from "../src/mcp/menu";
@@ -21,6 +22,7 @@ async function fixture(directPayload = false, groupedMenu = false) {
   const calls: Array<{ method: string; params?: any }> = [];
   const authBodies: Record<string, any> = {};
   let rejected = false;
+  let fault: { tool: string; status: number; remaining: number; retryAfter?: string } | undefined;
   const server = createServer(async (req, res) => {
     if (req.method === "GET") { res.writeHead(405).end(); return; }
     let raw = "";
@@ -36,6 +38,12 @@ async function fixture(directPayload = false, groupedMenu = false) {
     assert.equal(req.headers.authorization, "Bearer test-token");
     if (rejected) { res.writeHead(401).end(); return; }
     calls.push(body);
+    if (body.method === "tools/call" && fault?.tool === body.params?.name && fault.remaining > 0) {
+      fault.remaining--;
+      if (fault.retryAfter) res.setHeader("Retry-After", fault.retryAfter);
+      res.writeHead(fault.status).end();
+      return;
+    }
     let result: unknown;
     switch (body.method) {
       case "initialize":
@@ -111,7 +119,7 @@ async function fixture(directPayload = false, groupedMenu = false) {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/food`;
   const client = new SwiggyMcpClient({ endpoint, accessToken: "test-token", clientId: undefined, useMock: false, timeoutMs: 2000, redirectUri: "http://localhost/callback" });
-  return { client, calls, authBodies, reject: () => { rejected = true; }, close: async () => {
+  return { client, calls, authBodies, fail: (tool: string, status: number, remaining = 1, retryAfter?: string) => { fault = { tool, status, remaining, retryAfter }; }, reject: () => { rejected = true; }, close: async () => {
     await client.close();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -334,4 +342,96 @@ test("protein roll items keep their main dish when a dip or add-on is named alon
   for (const item of invalid) {
     assert.equal(dishRelevance(item as any, "chicken roll"), 0);
   }
+});
+
+
+test("empty upstream errors expose HTTP status and tool without leaking response bodies", async () => {
+  const f = await fixture();
+  try {
+    f.fail("get_addresses", 503);
+    await assert.rejects(new AddressMcpService(f.client).getAddresses(), error => {
+      assert.ok(error instanceof SwiggyTransportError);
+      assert.equal(error.status,503);
+      assert.match(error.message,/get_addresses.*HTTP 503/);
+      assert.match(error.message,/temporarily unavailable/);
+      assert.doesNotMatch(error.message,/test-token/);
+      return true;
+    });
+    assert.equal(f.calls.filter(c => c.params?.name === "get_addresses").length,1);
+    assert.equal(f.client.hasAccessToken(),true);
+    // The next user attempt gets a fresh MCP transport, keeping the OAuth token.
+    assert.equal((await new AddressMcpService(f.client).getAddresses()).addresses.length,1);
+  } finally { await f.close(); }
+});
+
+test("an expired MCP session reconnects once for reads but never replays order placement", async () => {
+  const f = await fixture();
+  try {
+    await f.client.listTools();
+    f.fail("get_addresses",404);
+    assert.equal((await new AddressMcpService(f.client).getAddresses()).addresses.length,1);
+    assert.equal(f.calls.filter(c => c.method === "initialize").length,2);
+    assert.equal(f.calls.filter(c => c.params?.name === "get_addresses").length,2);
+    f.fail("place_food_order",404);
+    await assert.rejects(new OrdersMcpService(f.client).placeOrder({ addressId:"home-1",paymentMethod:"Cash" },true),SwiggyTransportError);
+    assert.equal(f.calls.filter(c => c.params?.name === "place_food_order").length,1);
+  } finally { await f.close(); }
+});
+
+test("persistent session errors have a bounded retry and live recommendations skip cart coupons", async () => {
+  const f = await fixture();
+  try {
+    f.fail("get_addresses",404,3);
+    await assert.rejects(new AddressMcpService(f.client).getAddresses(),SwiggyTransportError);
+    assert.equal(f.calls.filter(c => c.params?.name === "get_addresses").length,2);
+    f.fail("fetch_food_coupons",400);
+    const restaurants = await new ToolOrchestrator(f.client).searchRestaurantsWithMenus("waffles","home-1");
+    assert.equal(restaurants.length,1);
+    assert.equal(f.calls.some(c => c.params?.name === "fetch_food_coupons"),false);
+  } finally { await f.close(); }
+});
+
+
+test("429 honors Retry-After, preserves the session and blocks repeated upstream calls", async () => {
+  const f = await fixture();
+  try {
+    f.fail("search_restaurants",429,1,"120");
+    const start = Date.now();
+    await assert.rejects(new RestaurantMcpService(f.client).searchRestaurants("waffles","home-1"), error => {
+      assert.ok(error instanceof SwiggyRateLimitError);
+      assert.ok(error.retryAt >= start+119000);
+      assert.match(error.message,/still connected/);
+      return true;
+    });
+    const before = f.calls.length;
+    await assert.rejects(new RestaurantMcpService(f.client).searchRestaurants("waffles","home-1"),SwiggyRateLimitError);
+    await assert.rejects(f.client.listTools(),SwiggyRateLimitError);
+    assert.equal(f.calls.length,before);
+    assert.equal(f.client.hasAccessToken(),true);
+    assert.ok(f.client.getStatus().retryAt);
+    assert.equal(f.calls.filter(c => c.method === "initialize").length,1);
+  } finally { await f.close(); }
+});
+
+test("read cache deduplicates concurrent requests and reuses menus during refinements", async () => {
+  const f = await fixture();
+  try {
+    const a = new AddressMcpService(f.client);
+    const pages = await Promise.all([a.getAddresses(),a.getAddresses()]);
+    assert.equal(pages[0].addresses.length,1);
+    pages[0].addresses.splice(0);
+    assert.equal((await a.getAddresses()).addresses.length,1);
+    const tools = new ToolOrchestrator(f.client);
+    await tools.searchRestaurantsWithMenus("waffles","home-1");
+    const before = f.calls.length;
+    await tools.searchRestaurantsWithMenus("waffles","home-1");
+    assert.equal(f.calls.length,before);
+    assert.equal(f.calls.filter(c => c.params?.name === "get_addresses").length,1);
+    assert.equal(f.calls.filter(c => c.params?.name === "search_restaurants").length,1);
+    assert.equal(f.calls.filter(c => c.params?.name === "get_restaurant_menu").length,1);
+    // Switching credentials discards cached private account data.
+    await f.client.setAccessToken("test-token");
+    await a.getAddresses();
+    assert.equal(f.calls.filter(c => c.params?.name === "get_addresses").length,2);
+  } finally { await f.close(); }
 });

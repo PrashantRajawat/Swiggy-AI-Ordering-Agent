@@ -7,10 +7,16 @@ import { OffersMcpService } from "../mcp/offers";
 import { mcpClient } from "../mcp/runtime";
 
 export class ToolOrchestrator {
-  private readonly restaurant = new RestaurantMcpService(mcpClient);
-  private readonly menu = new MenuMcpService(mcpClient);
-  private readonly address = new AddressMcpService(mcpClient);
-  private readonly offers = new OffersMcpService(mcpClient);
+  constructor(private readonly client = mcpClient) {
+    this.restaurant = new RestaurantMcpService(client);
+    this.menu = new MenuMcpService(client);
+    this.address = new AddressMcpService(client);
+    this.offers = new OffersMcpService(client);
+  }
+  private readonly restaurant: RestaurantMcpService;
+  private readonly menu: MenuMcpService;
+  private readonly address: AddressMcpService;
+  private readonly offers: OffersMcpService;
   private readonly restaurantLimit = Math.max(1, Math.min(10, Number(process.env.SWIGGY_MCP_MAX_RESTAURANTS) || 10));
 
   async searchRestaurantsWithMenus(query: string, selectedAddressId?: string, preferredRestaurants: string[] = []): Promise<Restaurant[]> {
@@ -27,7 +33,11 @@ export class ToolOrchestrator {
     for (const restaurant of filtered) {
       const items = await this.menu.getRestaurantMenu(restaurant.id, addressId);
       if (items.length) {
-        const coupons = await this.offers.getRestaurantCoupons(restaurant.id, addressId);
+        // Live coupon eligibility needs a real cart. These discounts are not used
+        // by menu recommendations, so do not make a cart-specific call here.
+        const coupons = this.client.isMockMode()
+          ? await this.offers.getRestaurantCoupons(restaurant.id, addressId)
+          : [];
         withMenus.push({ ...restaurant, items, coupons });
       }
     }

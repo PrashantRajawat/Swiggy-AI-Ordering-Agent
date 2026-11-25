@@ -1,3 +1,4 @@
+import { mcpClient } from "../mcp/runtime";
 import { LlmClient } from "../ai/llm";
 import { getLatestProfile, saveProfile } from "../memory/preferences";
 import { Coupon } from "../models/coupon";
@@ -30,15 +31,16 @@ export interface AgentResponse {
 }
 
 export class AgentOrchestrator {
+  constructor(client = mcpClient, private readonly isolated = false) { this.tools = new ToolOrchestrator(client); }
   private readonly llm = new LlmClient();
   private readonly conversation = new ConversationManager(this.llm);
-  private readonly tools = new ToolOrchestrator();
+  private readonly tools: ToolOrchestrator;
 
   async handleRequest(request: UserRequest): Promise<AgentResponse> {
     const intent = await this.llm.extractIntent(request.message);
     const dishQuery = resolveDishQuery(request.message, intent.dishQuery);
     if (!dishQuery) return { status: "need_more_info", followUpQuestions: ["Which dish would you like to order?"] };
-    const profile = getLatestProfile();
+    const profile = this.isolated ? null : getLatestProfile();
 
     const merged = mergePreferences(
       {
@@ -111,7 +113,7 @@ export class AgentOrchestrator {
       };
     }
 
-    saveProfile({
+    if (!this.isolated) saveProfile({
       usualBudget: preferences.budget,
       favoriteDessert: preferences.flavors[0],
       dislikes: preferences.dislikes,

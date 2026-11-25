@@ -58,3 +58,58 @@ test("web demo returns recommendations without Swiggy access and validates input
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("streamed chats persist across restarts and browser sessions cannot read each other's history", async () => {
+  const reservation = createServer();
+  await new Promise<void>(resolve => reservation.listen(0,"127.0.0.1",resolve));
+  const port = (reservation.address() as { port: number }).port;
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
+  const dir = await mkdtemp(path.join(tmpdir(),"crave-chat-api-"));
+  const base = `http://127.0.0.1:${port}`;
+  let child: ReturnType<typeof spawn>;
+  let logs = "";
+  const start = async () => {
+    child = spawn(process.execPath,["--import","tsx","src/web/server.ts"], { env: { ...process.env, PORT: String(port), USE_MOCK_MCP: "true", OPENAI_API_KEY: "", SQLITE_DB_PATH: path.join(dir,"chat.db") }, stdio: ["ignore","pipe","pipe"] });
+    child.stdout!.on("data",chunk => { logs += chunk; }); child.stderr!.on("data",chunk => { logs += chunk; });
+    for (let i=0;i<100;i++) {
+      if (child.exitCode !== null) throw new Error(logs);
+      try { if ((await fetch(`${base}/health`)).ok) return; } catch { /* starting */ }
+      await new Promise(resolve => setTimeout(resolve,30));
+    }
+    throw new Error(logs || "Server did not start");
+  };
+  const stop = async () => { if (child && child.exitCode === null) { const stopped = once(child,"exit"); child.kill("SIGTERM"); await stopped; } };
+  try {
+    await start();
+    const connection = await fetch(`${base}/api/mcp/status`);
+    const cookie = connection.headers.get("set-cookie")!.split(";")[0];
+    const headers = { Cookie: cookie, "Content-Type": "application/json" };
+    const chat = await (await fetch(`${base}/api/chats`,{ method: "POST",headers,body: "{}" })).json() as any;
+    const send = async (message: string) => {
+      const response = await fetch(`${base}/api/chats/${chat.id}/messages`,{ method:"POST",headers,body: JSON.stringify({ message }) });
+      assert.equal(response.status,200);
+      assert.match(response.headers.get("content-type")!,/text\/event-stream/);
+      const text = await response.text();
+      assert.match(text,/event: delta/); assert.match(text,/event: done/);
+      return text;
+    };
+    await send("Pizza");
+    await send("Under ₹500 for two");
+    const saved = await (await fetch(`${base}/api/chats/${chat.id}`,{ headers })).json() as any;
+    assert.equal(saved.messages.length,4);
+    assert.equal(saved.state.quantity,2); assert.equal(saved.state.budget,500);
+    assert.ok(saved.messages[3].cards.length > 0 && saved.messages[3].cards.length <= 5);
+    const other = await fetch(`${base}/api/mcp/status`);
+    const otherHeaders = { Cookie: other.headers.get("set-cookie")!.split(";")[0] };
+    assert.deepEqual(await (await fetch(`${base}/api/chats`,{ headers: otherHeaders })).json(),[]);
+    assert.equal((await fetch(`${base}/api/chats/${chat.id}`,{ headers: otherHeaders })).status,404);
+    assert.equal((await fetch(`${base}/api/order`,{ method:"POST",headers,body: "{}" })).status,409);
+    await stop(); await start();
+    const restored = await (await fetch(`${base}/api/chats/${chat.id}`,{ headers })).json() as any;
+    assert.deepEqual(restored,saved);
+    const p = await (await fetch(`${base}/api/profile`,{ headers })).json() as any;
+    assert.equal(p.budget,500);
+    await fetch(`${base}/api/chats/${chat.id}`,{ method: "DELETE",headers });
+    assert.equal((await fetch(`${base}/api/chats/${chat.id}`,{ headers })).status,404);
+  } finally { await stop(); await rm(dir,{ recursive:true,force:true }); }
+});
